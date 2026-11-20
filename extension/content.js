@@ -1,4 +1,5 @@
 const appUrl = chrome.runtime.getURL("index.html");
+const appOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 let overlay;
 let launcher;
 
@@ -60,6 +61,6 @@ chrome.runtime.onMessage.addListener((message, _, reply) => {
 });
 window.addEventListener("message", event => {
   const frame = overlay?.querySelector("iframe");
-  if (event.source === frame?.contentWindow && event.origin === new URL(appUrl).origin &&
+  if (event.source === frame?.contentWindow && event.origin === appOrigin &&
       event.data === "repofeed:close") closeFeed();
 });
