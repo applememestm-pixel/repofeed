@@ -29,9 +29,12 @@ jobs:
           node --check extension/background.js
       - name: Package Chromium extension
         run: python3 scripts/build-extension.py
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-35 build-tools;35.0.0
       - name: Build Android APK
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
           python3 scripts/build-android.py \
             --platform "$ANDROID_HOME/platforms/android-35/android.jar" \
             --tools "$ANDROID_HOME/build-tools/35.0.0"
