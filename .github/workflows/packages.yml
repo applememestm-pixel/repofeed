@@ -1,0 +1,42 @@
+name: Build Repo Feed packages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - index.html
+      - app.js
+      - config.js
+      - extension/**
+      - android/**
+      - scripts/**
+      - .github/workflows/packages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify web and extension scripts
+        run: |
+          node --check app.js
+          node --check config.js
+          node --check extension/content.js
+          node --check extension/background.js
+      - name: Package Chromium extension
+        run: python3 scripts/build-extension.py
+      - name: Build Android APK
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          python3 scripts/build-android.py \
+            --platform "$ANDROID_HOME/platforms/android-35/android.jar" \
+            --tools "$ANDROID_HOME/build-tools/35.0.0"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repofeed-packages
+          path: dist/
+          if-no-files-found: error

@@ -3,8 +3,9 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Repo Feed — демо v2</title>
-<meta name="description" content="Лента, свайпы и поиск по репозиториям GitHub. Работает прямо в браузере, без сервера." />
+<title>Repo Feed — поиск проектов на GitHub</title>
+<meta name="description" content="Лента, свайпы и живой поиск по публичным репозиториям GitHub." />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://opengraph.githubassets.com https://avatars.githubusercontent.com; connect-src https://api.github.com https://github.com; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'" />
 <style>
   :root {
     --bg: #0d1117;
@@ -218,6 +219,23 @@
     background: none; padding: 8px 10px; cursor: pointer;
   }
   #undoBtn:disabled { opacity: .45; cursor: default; }
+  [hidden] { display: none !important; }
+  #accountBtn { flex: none; margin-inline-start: auto; }
+  .account-dialog {
+    width: min(460px, calc(100% - 32px)); padding: 22px; color: var(--text);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+  }
+  .account-dialog::backdrop { background: #080b12b8; }
+  .account-dialog h2 { margin: 0 0 12px; font-size: 20px; }
+  .account-dialog input, .account-dialog button {
+    padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--panel-2); color: var(--text);
+  }
+  .account-dialog input { width: 100%; }
+  .account-dialog form { display: grid; gap: 8px; margin-top: 12px; }
+  .account-dialog a { color: var(--accent); overflow-wrap: anywhere; }
+  .account-dialog > a, .account-dialog > button { margin: 0 8px 8px 0; }
+  #summaryText { white-space: pre-line; }
   #summaryDialog {
     width: min(460px, calc(100% - 32px)); padding: 24px; color: var(--text);
     background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
@@ -377,9 +395,10 @@
         <input id="tagInput" type="text" aria-label="Тема репозиториев" placeholder="тег, напр. rust, machine-learning" value="machine-learning" />
         <button class="icon-btn" id="goBtn" title="Искать">↵</button>
       </div>
+      <button id="accountBtn" type="button" class="icon-btn">GitHub</button>
     </div>
 
-    <p class="demo-note">Демо v2 · условные счётчики. Попробуй темы machine-learning, rust или web.</p>
+    <p class="demo-note">Публичные репозитории GitHub. Попробуй темы machine-learning, rust или web.</p>
     <div class="tabs">
       <button data-mode="feed" class="active">Обзор</button>
       <button data-mode="reco">Для вас</button>
@@ -442,416 +461,25 @@
 <dialog id="summaryDialog" aria-labelledby="summaryTitle">
   <h2 id="summaryTitle"></h2>
   <p id="summaryText"></p>
-  <small>Сводка подготовлена ИИ заранее для демо.</small>
+  <small id="summarySource"></small>
   <form method="dialog"><button class="summary-close" autofocus>Закрыть</button></form>
 </dialog>
 
-<script>
-"use strict";
-
-const LS_SWIPES = "repofeed.demo.swipes.v1";
-
-// ---------- Состояние ----------
-let mode = "feed";                 // feed | reco | list | liked | history
-const DEFAULT_TOPIC = "machine-learning";
-let currentTag = DEFAULT_TOPIC;
-let queue = [];                    // очередь карточек для свайпа
-let lastRemoved = null;            // для undo
-
-let listPage = 1, listPerPage = 100, listHasMore = true;
-let historyFilter = "all";
-
-// ---------- DOM ----------
-const $ = sel => document.querySelector(sel);
-const stackEl = $("#stack");
-const deckWrap = $("#deckWrap");
-const tagInput = $("#tagInput");
-const panels = { list: $("#listPanel"), liked: $("#likedPanel"), history: $("#historyPanel") };
-
-// ================= Хранилище свайпов (localStorage) =================
-function loadSwipes() {
-  try { return JSON.parse(localStorage.getItem(LS_SWIPES)) || {}; }
-  catch { return {}; }
-}
-function saveSwipes(obj) {
-  try { localStorage.setItem(LS_SWIPES, JSON.stringify(obj)); } catch {}
-}
-function recordSwipe(repo, action) {
-  const all = loadSwipes();
-  all[repo.id] = {
-    action, ts: Date.now(),
-    repo: {
-      id: repo.id, name: repo.name, full_name: repo.full_name, description: repo.description,
-      language: repo.language, topics: repo.topics || [],
-      stargazers_count: repo.stargazers_count, html_url: repo.html_url,
-      owner_login: repo.owner_login, owner_avatar_url: repo.owner_avatar_url,
-    },
-  };
-  saveSwipes(all);
-}
-function removeSwipe(repoId) {
-  const all = loadSwipes();
-  delete all[repoId];
-  saveSwipes(all);
-}
-function swipedIds() { return new Set(Object.keys(loadSwipes()).map(Number)); }
-
-const demoRepos = [
-  {"id": 1, "name": "pytorch", "full_name": "pytorch/pytorch", "owner_login": "pytorch", "language": "Python", "topics": ["machine-learning", "deep-learning", "python"], "description": "PyTorch — библиотека для вычислений над тензорами и обучения нейросетей на CPU и GPU. В неё входят автоматическое дифференцирование, слои и оптимизаторы.", "stargazers_count": 86000, "forks_count": 8600, "open_issues_count": 717, "html_url": "https://github.com/pytorch/pytorch", "summary": "Подойдёт, если нужно самостоятельно собрать модель, обучить её на своих данных или воспроизвести исследование. Для запуска уже готовой модели с минимумом кода удобнее начать с библиотеки, которая её упаковывает."},
-  {"id": 2, "name": "transformers", "full_name": "huggingface/transformers", "owner_login": "huggingface", "language": "Python", "topics": ["machine-learning", "deep-learning", "python"], "description": "Hugging Face Transformers даёт единый интерфейс к готовым моделям для текста, изображений и аудио. В библиотеке есть инструменты для запуска моделей и дообучения на своих данных.", "stargazers_count": 140000, "forks_count": 14000, "open_issues_count": 1167, "html_url": "https://github.com/huggingface/transformers", "summary": "Подойдёт, если хочешь быстро попробовать открытую модель или адаптировать её под свою задачу. Начни с pipeline из README. Для крупных моделей заранее проверь требования к памяти и лицензию."},
-  {"id": 3, "name": "scikit-learn", "full_name": "scikit-learn/scikit-learn", "owner_login": "scikit-learn", "language": "Python", "topics": ["machine-learning", "python"], "description": "Scikit-learn — набор алгоритмов классического машинного обучения для Python. Поддерживает классификацию, регрессию, кластеризацию, подготовку данных и оценку моделей.", "stargazers_count": 61000, "forks_count": 6100, "open_issues_count": 508, "html_url": "https://github.com/scikit-learn/scikit-learn", "summary": "Хорошая отправная точка для табличных данных. Собери подготовку и модель в Pipeline, затем сравни несколько алгоритмов на одних и тех же разбиениях выборки."},
-  {"id": 4, "name": "ollama", "full_name": "ollama/ollama", "owner_login": "ollama", "language": "Go", "topics": ["machine-learning", "llm", "go"], "description": "Ollama запускает языковые модели локально и управляет их загрузкой. С моделями можно общаться из терминала или вызывать их через локальный HTTP API.", "stargazers_count": 130000, "forks_count": 13000, "open_issues_count": 1083, "html_url": "https://github.com/ollama/ollama", "summary": "Удобно для быстрого прототипа с локальной LLM. Выбери небольшую модель для первого запуска и проверь расход памяти, прежде чем переходить на более крупную."},
-  {"id": 5, "name": "llama.cpp", "full_name": "ggml-org/llama.cpp", "owner_login": "ggml-org", "language": "C++", "topics": ["machine-learning", "llm", "cpp"], "description": "llama.cpp запускает языковые модели на обычных компьютерах, включая CPU и поддерживаемые GPU. Проект поддерживает формат GGUF и квантованные веса.", "stargazers_count": 76000, "forks_count": 7600, "open_issues_count": 633, "html_url": "https://github.com/ggml-org/llama.cpp", "summary": "Подойдёт, если нужен контроль над памятью, параметрами запуска и оборудованием. Для пробы можно использовать CLI или поднять локальный сервер из проекта."},
-  {"id": 6, "name": "fastai", "full_name": "fastai/fastai", "owner_login": "fastai", "language": "Python", "topics": ["machine-learning", "deep-learning", "python"], "description": "fastai — библиотека поверх PyTorch. Она даёт готовые компоненты для подготовки данных, настройки обучения и переноса обучения на свои датасеты.", "stargazers_count": 26000, "forks_count": 2600, "open_issues_count": 217, "html_url": "https://github.com/fastai/fastai", "summary": "Подходит для быстрого обучения первой модели без ручной сборки всего цикла. В примерах проекта можно посмотреть, как устроены загрузка данных, обучение и оценка."},
-  {"id": 7, "name": "jupyterlab", "full_name": "jupyterlab/jupyterlab", "owner_login": "jupyterlab", "language": "TypeScript", "topics": ["python", "web"], "description": "JupyterLab — браузерная среда для Jupyter Notebook. В одном окне можно открыть блокнот, терминал, файловый менеджер и результаты вычислений.", "stargazers_count": 17000, "forks_count": 1700, "open_issues_count": 142, "html_url": "https://github.com/jupyterlab/jupyterlab", "summary": "Удобен для исследования данных и экспериментов в виде блокнотов, где код, графики и пояснения идут рядом. Поддерживает разные языки через ядра Jupyter."},
-  {"id": 8, "name": "lmstudio.js", "full_name": "lmstudio-ai/lmstudio.js", "owner_login": "lmstudio-ai", "language": "TypeScript", "topics": ["llm"], "description": "JavaScript SDK для работы с локальными моделями через LM Studio. Подходит для Node.js и TypeScript-проектов, которым нужен доступ к генерации текста.", "stargazers_count": 1800, "forks_count": 180, "open_issues_count": 15, "html_url": "https://github.com/lmstudio-ai/lmstudio.js", "summary": "Если LM Studio уже установлен, через SDK можно связать локальную модель с собственным инструментом. Начни с примера загрузки модели и одного запроса."},
-  {"id": 9, "name": "ripgrep", "full_name": "BurntSushi/ripgrep", "owner_login": "BurntSushi", "language": "Rust", "topics": ["rust", "cli"], "description": "ripgrep — быстрый поиск текста по файлам из терминала. По умолчанию учитывает .gitignore и пропускает скрытые и бинарные файлы.", "stargazers_count": 52000, "forks_count": 5200, "open_issues_count": 433, "html_url": "https://github.com/BurntSushi/ripgrep", "summary": "Полезен для навигации по большому проекту или поиска шаблона по регулярному выражению. Команда rg ищет рекурсивно, а правила исключений можно переопределить."},
-  {"id": 10, "name": "bat", "full_name": "sharkdp/bat", "owner_login": "sharkdp", "language": "Rust", "topics": ["rust", "cli"], "description": "bat выводит файлы в терминал с подсветкой синтаксиса, номерами строк и отметками изменений Git. Это расширенный просмотрщик в духе cat.", "stargazers_count": 50000, "forks_count": 5000, "open_issues_count": 417, "html_url": "https://github.com/sharkdp/bat", "summary": "Подойдёт, чтобы читать исходники и конфиги прямо в терминале. В обычных конвейерах удобно отключать оформление, когда вывод нужен следующей команде."},
-  {"id": 11, "name": "tokio", "full_name": "tokio-rs/tokio", "owner_login": "tokio-rs", "language": "Rust", "topics": ["rust", "async"], "description": "Tokio — асинхронная среда выполнения для Rust. Включает планирование задач, таймеры, сетевой ввод-вывод и примитивы синхронизации.", "stargazers_count": 29000, "forks_count": 2900, "open_issues_count": 242, "html_url": "https://github.com/tokio-rs/tokio", "summary": "Подходит для сервисов, которые держат много одновременных соединений. Для старта достаточно одного асинхронного обработчика и простого TCP-примера."},
-  {"id": 12, "name": "axum", "full_name": "tokio-rs/axum", "owner_login": "tokio-rs", "language": "Rust", "topics": ["rust", "web", "async"], "description": "Axum — веб-фреймворк на Rust для HTTP API. Он работает поверх Tokio и использует экосистему Tower для промежуточных обработчиков.", "stargazers_count": 23000, "forks_count": 2300, "open_issues_count": 192, "html_url": "https://github.com/tokio-rs/axum", "summary": "Подойдёт для сервиса с типизированными обработчиками. Начни с маршрута и Json, затем подключи состояние приложения и нужные middleware."},
-  {"id": 13, "name": "vite", "full_name": "vitejs/vite", "owner_login": "vitejs", "language": "TypeScript", "topics": ["typescript", "javascript", "web"], "description": "Vite — инструмент для запуска и сборки фронтенда. В режиме разработки он поднимает локальный сервер и обновляет изменившиеся модули.", "stargazers_count": 71000, "forks_count": 7100, "open_issues_count": 592, "html_url": "https://github.com/vitejs/vite", "summary": "Удобен для нового веб-проекта или отдельного прототипа. Можно выбрать шаблон под фреймворк или начать с обычных HTML, CSS и JavaScript."},
-  {"id": 14, "name": "svelte", "full_name": "sveltejs/svelte", "owner_login": "sveltejs", "language": "JavaScript", "topics": ["javascript", "typescript", "web"], "description": "Svelte — компилятор для создания веб-интерфейсов из компонентов. Реактивное состояние и разметка описываются рядом в файлах .svelte.", "stargazers_count": 82000, "forks_count": 8200, "open_issues_count": 683, "html_url": "https://github.com/sveltejs/svelte", "summary": "Подойдёт для интерактивного интерфейса с небольшим количеством шаблонного кода. Для приложения с маршрутами и серверной частью стоит посмотреть примеры SvelteKit."},
-  {"id": 15, "name": "astro", "full_name": "withastro/astro", "owner_login": "withastro", "language": "TypeScript", "topics": ["typescript", "javascript", "web"], "description": "Astro — веб-фреймворк для сайтов с большим количеством контента. Интерактивные компоненты можно подключать только там, где нужен JavaScript в браузере.", "stargazers_count": 50000, "forks_count": 5000, "open_issues_count": 417, "html_url": "https://github.com/withastro/astro", "summary": "Подойдёт для документации, блога или лендинга. Можно смешивать статические страницы с интерактивными блоками и задавать им момент загрузки."},
-  {"id": 16, "name": "fastapi", "full_name": "fastapi/fastapi", "owner_login": "fastapi", "language": "Python", "topics": ["python", "web"], "description": "FastAPI — фреймворк для HTTP API на Python. Использует аннотации типов для проверки входных данных и автоматически формирует документацию OpenAPI.", "stargazers_count": 83000, "forks_count": 8300, "open_issues_count": 692, "html_url": "https://github.com/fastapi/fastapi", "summary": "Удобен для первого API или небольшого сервиса. Для пробы опиши маршрут и модель данных, затем проверь параметры и ответы в интерактивной документации."},
-  {"id": 17, "name": "cli", "full_name": "cli/cli", "owner_login": "cli", "language": "Go", "topics": ["go", "cli"], "description": "GitHub CLI — официальный инструмент для работы с GitHub из командной строки. Поддерживает репозитории, issues, pull requests и запуски Actions.", "stargazers_count": 39000, "forks_count": 3900, "open_issues_count": 325, "html_url": "https://github.com/cli/cli", "summary": "Полезен, если часто работаешь из терминала. После входа можно посмотреть состояние PR и открыть нужную страницу, не разыскивая её вручную."}
-];
-
-function ghSearch(query, page, perPage) {
-  const topic = query.slice("topic:".length).toLowerCase();
-  const matching = demoRepos.filter(repo => repo.topics.includes(topic));
-  matching.sort((a, b) => b.stargazers_count - a.stargazers_count);
-  const offset = (page - 1) * perPage;
-  return { items: matching.slice(offset, offset + perPage), total_count: matching.length };
-}
-
-const LANG_COLORS = {
-  JavaScript:"#f1e05a", TypeScript:"#3178c6", Python:"#3572A5", Rust:"#dea584",
-  Go:"#00ADD8", Java:"#b07219", "C++":"#f34b7d", C:"#555555", "C#":"#178600",
-  Ruby:"#701516", PHP:"#4F5D95", Swift:"#F05138", Kotlin:"#A97BFF", Shell:"#89e051",
-  HTML:"#e34c26", CSS:"#563d7c", Vue:"#41b883", Dart:"#00B4AB", Elixir:"#6e4a7e",
-  Lua:"#000080", Zig:"#ec915c", Julia:"#a270ba", Scala:"#c22d40", Haskell:"#5e5086",
-  Nix:"#7e7eff", Svelte:"#ff3e00", Jupyter:"#DA5B0B", "Jupyter Notebook":"#DA5B0B",
-};
-
-// ================= Рекомендации (клиентские) =================
-function likedProfile() {
-  const all = loadSwipes();
-  const topics = {}, langs = {};
-  for (const id in all) {
-    const e = all[id];
-    if (e.action !== "like") continue;
-    (e.repo.topics || []).forEach(t => topics[t] = (topics[t] || 0) + 1);
-    if (e.repo.language) langs[e.repo.language] = (langs[e.repo.language] || 0) + 1;
-  }
-  return { topics, langs };
-}
-function topKeys(obj, n) {
-  return Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(e => e[0]);
-}
-function scoreRepo(repo, prof) {
-  let s = Math.min(repo.stargazers_count, 50000) / 50000;
-  (repo.topics || []).forEach(t => { if (prof.topics[t]) s += prof.topics[t] * 3; });
-  if (repo.language && prof.langs[repo.language]) s += prof.langs[repo.language] * 2;
-  return s;
-}
-
-// ================= Утилиты =================
-function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
-function fmt(n) { return n >= 1000 ? (n / 1000).toFixed(1).replace(".0", "") + "k" : String(n); }
-function toast(msg) {
-  const el = document.createElement("div");
-  el.className = "toast"; el.textContent = msg;
-  $("#toasts").appendChild(el);
-  setTimeout(() => el.remove(), 2600);
-}
-
-// ================= Переключение режимов =================
-function switchMode(m) {
-  mode = m;
-  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.mode === m));
-  const swipe = (m === "feed" || m === "reco");
-  deckWrap.style.display = swipe ? "flex" : "none";
-  panels.list.classList.toggle("active", m === "list");
-  panels.liked.classList.toggle("active", m === "liked");
-  panels.history.classList.toggle("active", m === "history");
-  $(".search").style.display = (m === "feed" || m === "list") ? "flex" : "none";
-
-  if (m === "list") { listPage = 1; loadList(); }
-  else if (m === "liked") loadLiked();
-  else if (m === "history") loadHistory();
-  else resetDeck();
-}
-
-// ================= Свайп-колода =================
-function showEmpty(message) {
-  stackEl.innerHTML = '<div class="state"></div>';
-  stackEl.firstElementChild.textContent = message;
-  updateSwipeActions();
-}
-
-function resetDeck() {
-  const swiped = swipedIds();
-  const profile = likedProfile();
-  lastRemoved = null;
-
-  if (mode === "reco") {
-    const topics = topKeys(profile.topics, 4);
-    const unique = new Map();
-    for (const topic of topics) {
-      for (const repo of ghSearch("topic:" + topic, 1, 25).items) unique.set(repo.id, repo);
-    }
-    queue = [...unique.values()];
-    if (!topics.length) {
-      showEmpty("Сохрани несколько проектов, чтобы получить рекомендации");
-      return;
-    }
-  } else {
-    queue = ghSearch("topic:" + currentTag, 1, demoRepos.length).items;
-  }
-  queue = queue.filter(repo => !swiped.has(repo.id));
-  queue.sort((a, b) => scoreRepo(b, profile) - scoreRepo(a, profile));
-  renderStack();
-}
-
-function updateSwipeActions() {
-  $("#skipBtn").disabled = !queue.length;
-  $("#likeBtn").disabled = !queue.length;
-  $("#undoBtn").disabled = !lastRemoved;
-}
-
-function renderStack() {
-  if (queue.length === 0) {
-    showEmpty(mode === "reco" ? "Рекомендации закончились" : "Нет новых карточек по этой теме. Попробуй machine-learning, rust или web.");
-    return;
-  }
-  stackEl.innerHTML = "";
-  stackEl.appendChild(buildCard(queue[0]));
-  updateSwipeActions();
-}
-
-function buildCard(repo) {
-  const card = document.createElement("article");
-  card.className = "card";
-
-  const langColor = LANG_COLORS[repo.language] || "#8b949e";
-
-  card.innerHTML = `
-    <div class="cover">
-      <div class="cover-fallback" aria-hidden="true"><span>{ }</span>${escapeHtml(repo.owner_login)}</div>
-    </div>
-    <div class="stamp skip" aria-hidden="true">× Пропустить</div>
-    <div class="stamp like" aria-hidden="true">♡ Сохранить</div>
-    <div class="body">
-      <p class="owner">${escapeHtml(repo.owner_login)}</p>
-      <h2><a href="${repo.html_url}" target="_blank" rel="noopener noreferrer">${escapeHtml(repo.name)} <span aria-hidden="true">↗</span></a></h2>
-      <p class="desc">${escapeHtml(repo.description)}</p>
-      <div class="topics">${(repo.topics || []).slice(0, 6).map(t => `<span>${escapeHtml(t)}</span>`).join("")}</div>
-      <div class="card-footer">
-        <div class="stats">
-          <span>★ ${fmt(repo.stargazers_count)}</span>
-          <span>⑂ ${fmt(repo.forks_count)}</span>
-          <span>⚑ ${fmt(repo.open_issues_count)}</span>
-          ${repo.language ? `<span><span class="lang-dot" style="background:${langColor}"></span>${escapeHtml(repo.language)}</span>` : ""}
-        </div>
-        <button type="button" class="summary-btn">✦ Краткая сводка</button>
-      </div>
-    </div>`;
-  const cover = card.querySelector(".cover");
-  const image = new Image();
-  image.alt = "";
-  image.draggable = false;
-  image.referrerPolicy = "no-referrer";
-  image.addEventListener("load", () => image.classList.add("ready"), { once: true });
-  image.addEventListener("error", () => image.remove(), { once: true });
-  image.src = "https://opengraph.githubassets.com/1/" + repo.full_name;
-  cover.appendChild(image);
-
-  const summaryButton = card.querySelector(".summary-btn");
-  summaryButton.addEventListener("click", () => {
-    $("#summaryTitle").textContent = repo.name + " · кратко";
-    $("#summaryText").textContent = repo.summary;
-    $("#summaryDialog").showModal();
-  });
-  attachDrag(card);
-  return card;
-}
-
-
-function attachDrag(card) {
-  let drag = null;
-  const like = card.querySelector(".stamp.like");
-  const skip = card.querySelector(".stamp.skip");
-  card.addEventListener("pointerdown", event => {
-    if (!event.isPrimary || event.button !== 0 || event.target.closest("a, button") || card.dataset.swiping) return;
-    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0 };
-    card.setPointerCapture(drag.id);
-    card.style.transition = "none";
-  });
-  card.addEventListener("pointermove", event => {
-    if (event.pointerId !== drag?.id) return;
-    const x = event.clientX - drag.x;
-    const y = event.clientY - drag.y;
-    drag.dx = x;
-    card.style.transform = "translate(" + x + "px," + y * 0.25 + "px) rotate(" + x / 20 + "deg)";
-    like.style.opacity = Math.min(1, Math.max(0, x / 95));
-    skip.style.opacity = Math.min(1, Math.max(0, -x / 95));
-  });
-  function finish(event) {
-    if (event.pointerId !== drag?.id) return;
-    const { dx } = drag;
-    drag = null;
-    card.style.transition = "";
-    if (event.type === "pointerup" && Math.abs(dx) >= 95) {
-      doSwipe(dx > 0 ? "like" : "skip");
-    } else {
-      card.style.transform = "";
-      like.style.opacity = 0;
-      skip.style.opacity = 0;
-    }
-  }
-  card.addEventListener("pointerup", finish);
-  card.addEventListener("pointercancel", finish);
-  card.addEventListener("lostpointercapture", finish);
-}
-
-function doSwipe(action) {
-  const top = stackEl.firstElementChild;
-  if (!queue.length || !top || top.dataset.swiping) return;
-  const repo = queue.shift();
-  lastRemoved = { repo, action };
-  recordSwipe(repo, action);
-
-  top.dataset.swiping = "true";
-  top.inert = true;
-  top.querySelector(".stamp." + action).style.opacity = 1;
-  const dir = action === "like" ? 1 : -1;
-  top.style.transform = "translate(" + dir * 120 + "px, -10px) rotate(" + dir * 9 + "deg)";
-  top.style.opacity = "0";
-  updateSwipeActions();
-  setTimeout(() => {
-    if (stackEl.firstElementChild === top) renderStack();
-  }, 200);
-}
-
-function undoLast() {
-  if (!lastRemoved) { toast("Нечего отменять"); return; }
-  removeSwipe(lastRemoved.repo.id);
-  queue.unshift(lastRemoved.repo);
-  lastRemoved = null;
-  renderStack();
-  toast("Отменено");
-}
-
-// ================= Список =================
-function loadList() {
-  const rows = $("#listRows");
-  if (!currentTag) { rows.innerHTML = `<div class="note">Введите тег и нажмите Enter</div>`; return; }
-  rows.innerHTML = skeletonRows(10);
-  $("#pageLabel").textContent = `Стр. ${listPage}`;
-  $("#prevPageBtn").disabled = listPage <= 1;
-  try {
-    const data = ghSearch(`topic:${currentTag}`, listPage, listPerPage);
-    listHasMore = data.items.length === listPerPage && listPage * listPerPage < 1000;
-    $("#nextPageBtn").disabled = !listHasMore;
-    if (data.items.length === 0) { rows.innerHTML = `<div class="note">Ничего не найдено</div>`; return; }
-    const total = Math.min(data.total_count, 1000);
-    $("#pageLabel").textContent = `Стр. ${listPage} · ~${fmt(total)}${data.total_count > 1000 ? "+" : ""}`;
-    rows.innerHTML = data.items.map(repoRow).join("");
-  } catch (e) {
-    rows.innerHTML = `<div class="note">⚠ ${escapeHtml(e.message)}</div>`;
-    $("#nextPageBtn").disabled = true;
-  }
-}
-function repoRow(r) {
-  return `<a class="row" href="${r.html_url}" target="_blank" rel="noopener">
-    ${r.owner_avatar_url ? `<img class="avatar" src="${r.owner_avatar_url}" alt="" onerror="this.style.visibility='hidden'">` : `<span class="avatar"></span>`}
-    <span class="name"><span class="ownr">${escapeHtml(r.owner_login || r.full_name.split("/")[0])}/</span>${escapeHtml(r.name)}</span>
-    <span class="row-stars">★ ${fmt(r.stargazers_count)}</span>
-    <span class="row-tags">${(r.topics || []).slice(0, 3).map(t => `<span>${escapeHtml(t)}</span>`).join("")}</span>
-  </a>`;
-}
-function skeletonRows(n) {
-  let s = "";
-  for (let i = 0; i < n; i++) s += `<div class="skel-row"><div class="skel c"></div><div class="skel l" style="max-width:${40 + (i*7)%45}%"></div></div>`;
-  return s;
-}
-
-// ================= Избранное =================
-function loadLiked() {
-  const rows = $("#likedRows");
-  const all = loadSwipes();
-  const liked = Object.values(all).filter(e => e.action === "like").sort((a, b) => b.ts - a.ts).map(e => e.repo);
-  if (liked.length === 0) { rows.innerHTML = `<div class="note">Здесь появятся проекты, которые ты сохранишь</div>`; return; }
-  rows.innerHTML = liked.map(repoRow).join("");
-}
-
-// ================= История =================
-function loadHistory() {
-  const rows = $("#historyRows");
-  const all = loadSwipes();
-  let entries = Object.values(all).sort((a, b) => b.ts - a.ts);
-  if (historyFilter !== "all") entries = entries.filter(e => e.action === historyFilter);
-  if (entries.length === 0) { rows.innerHTML = `<div class="note">Пусто — здесь появятся все просмотренные репозитории</div>`; return; }
-  rows.innerHTML = entries.map(e => {
-    const r = e.repo;
-    return `<div class="row">
-      <span class="action-icon ${e.action}">${e.action === "like" ? "★" : "✕"}</span>
-      ${r.owner_avatar_url ? `<img class="avatar" src="${r.owner_avatar_url}" alt="" onerror="this.style.visibility='hidden'">` : `<span class="avatar"></span>`}
-      <a class="name" href="${r.html_url}" target="_blank" rel="noopener"><span class="ownr">${escapeHtml(r.owner_login || r.full_name.split("/")[0])}/</span>${escapeHtml(r.full_name.split("/")[1] || "")}</a>
-      <span class="row-tags">${(r.topics || []).slice(0, 3).map(t => `<span>${escapeHtml(t)}</span>`).join("")}</span>
-      <button class="remove-btn" title="Убрать" data-id="${r.id}">✕</button>
-    </div>`;
-  }).join("");
-}
-
-// ================= События =================
-function onTagSubmit() {
-  currentTag = tagInput.value.trim() || DEFAULT_TOPIC;
-  tagInput.value = currentTag;
-  if (mode === "list") { listPage = 1; loadList(); }
-  else if (mode === "feed") resetDeck();
-  else { switchMode("feed"); }
-}
-
-document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => switchMode(b.dataset.mode));
-$("#goBtn").onclick = onTagSubmit;
-tagInput.addEventListener("keydown", e => { if (e.key === "Enter") onTagSubmit(); });
-
-$("#likeBtn").onclick = () => doSwipe("like");
-$("#skipBtn").onclick = () => doSwipe("skip");
-$("#undoBtn").onclick = undoLast;
-
-$("#perPageSelect").onchange = e => { listPerPage = +e.target.value; listPage = 1; loadList(); };
-$("#prevPageBtn").onclick = () => { if (listPage > 1) { listPage--; loadList(); } };
-$("#nextPageBtn").onclick = () => { if (listHasMore) { listPage++; loadList(); } };
-
-document.querySelectorAll(".filter-tabs button").forEach(b => b.onclick = () => {
-  historyFilter = b.dataset.filter;
-  document.querySelectorAll(".filter-tabs button").forEach(x => x.classList.toggle("active", x === b));
-  loadHistory();
-});
-$("#clearHistoryBtn").onclick = () => {
-  if (confirm("Очистить всю историю просмотров? Сохранённые проекты тоже будут удалены.")) {
-    saveSwipes({}); loadHistory(); toast("История очищена");
-  }
-};
-$("#historyRows").addEventListener("click", e => {
-  const btn = e.target.closest(".remove-btn");
-  if (btn) { removeSwipe(+btn.dataset.id); loadHistory(); }
-});
-
-document.addEventListener("keydown", e => {
-  if ($("#summaryDialog").open || e.target.closest("input, select, textarea, button, a") || e.repeat) return;
-  if (mode !== "feed" && mode !== "reco") return;
-  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-    e.preventDefault();
-    doSwipe(e.key === "ArrowRight" ? "like" : "skip");
-  }
-  else if (e.key === "Backspace") { e.preventDefault(); undoLast(); }
-});
-
-// ================= Старт =================
-resetDeck();
-</script>
+<dialog id="accountDialog" class="account-dialog" aria-labelledby="accountTitle">
+  <h2 id="accountTitle">Аккаунт GitHub</h2>
+  <p id="accountStatus" role="status">Без входа доступна публичная выдача.</p>
+  <button id="deviceLoginBtn" type="button" hidden>Войти через GitHub</button>
+  <a id="verifyDevice" target="_blank" rel="noopener noreferrer" hidden>Подтвердить вход в GitHub</a>
+  <form id="tokenForm">
+    <label for="tokenInput">Токен GitHub для текущей сессии</label>
+    <input id="tokenInput" type="password" autocomplete="off" spellcheck="false" />
+    <button type="submit">Подключить</button>
+    <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Создать токен с доступом к публичным репозиториям</a>
+  </form>
+  <button id="signOutBtn" type="button" hidden>Выйти</button>
+  <form method="dialog"><button class="summary-close">Закрыть</button></form>
+</dialog>
+<script src="config.js" defer></script>
+<script src="app.js" defer></script>
 </body>
 </html>

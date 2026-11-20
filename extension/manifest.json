@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Repo Feed for GitHub",
+  "version": "1.0.0",
+  "description": "Repo Feed: поиск и просмотр публичных репозиториев прямо на GitHub.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://github.com/*",
+    "https://api.github.com/*"
+  ],
+  "action": {
+    "default_title": "Открыть Repo Feed"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://github.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "overlay.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "index.html"
+      ],
+      "matches": [
+        "https://github.com/*"
+      ]
+    }
+  ]
+}
