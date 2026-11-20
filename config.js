@@ -1,1 +1,1 @@
-globalThis.REPOFEED_GITHUB_CLIENT_ID = "";
+globalThis.REPOFEED_GITHUB_CLIENT_ID = "Ov23liTfvfolqMa970Dr";
